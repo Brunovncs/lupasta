@@ -1,0 +1,125 @@
+// Builds fixtures/visual/Users — a synthetic filesystem reproducing the names seen in the
+// reference video. Each entry carries an "age" t ∈ [0,1] (0 = just modified, 1 = oldest);
+// mtimes are derived with the same curve the palette uses, so colors match the reference.
+import { mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { ageForT } from "../src/styles/palette";
+
+type Spec = number | [number, Tree];
+type Tree = Record<string, Spec>;
+
+const tree: Tree = {
+  ".localized": 1.0,
+  Shared: [0.62, { "Public Notes.txt": 0.7, Relocated: [0.8, { "old.txt": 0.9 }] }],
+  drcode: [0.0, {
+    Desktop: [0.49, { "Screenshot 2026-09-12.png": 0.3, "todo.txt": 0.6 }],
+    Downloads: [0.59, { "invoice-0923.pdf": 0.5, "field-recording.m4a": 0.8, "export.xlsx": 0.9, "calendar.ics": 0.7 }],
+    "file-browser": [0.19, {
+      ".git": [0.0, {
+        COMMIT_EDITMSG: 0.3, config: 0.5, description: 0.9, FETCH_HEAD: 0.22,
+        HEAD: 1.0, hooks: [0.95, { "pre-commit.sample": 0.95, "pre-push.sample": 0.95 }],
+        index: 0.64, logs: [0.7, { HEAD: 0.2 }], objects: [0.0, { "0a": [0.4, { "1f3c9e": 0.4 }], info: [0.9, {}], pack: [0.6, {}] }],
+        "packed-refs": 0.2, refs: [0.7, { heads: [0.7, { main: 0.1 }], tags: [0.9, {}] }],
+      }],
+      ".gitignore": 0.89,
+      build: [0.38, {
+        "ancestor-preview.png": 0.64, "browser-preview.png": 0.05, "cross-level-spacing.png": 0.97,
+        "file-browser": 0.0, "file-browser-performance.png": 0.83, "file-browser-tests": 0.7,
+        "offscreen-connector-dots.png": 0.5, "orthogonal-connectors.png": 0.3,
+        "performance-validation": [0.9, { "results.csv": 0.9 }], "route-capture": [0.72, { "capture-01.png": 0.72 }],
+      }],
+      "Info.plist": 0.85,
+      "README.md": 0.5,
+      scripts: [0.76, { "build.sh": 0.95, "install.sh": 0.5, "run.sh": 0.75, "test.sh": 0.0 }],
+      Sources: [0.68, {
+        "App.swift": 0.64, "ConnectorRounding.swift": 0.7, "FileBrowserModel.swift": 0.5,
+        "FileBrowserView.swift": 0.0, "NameEditor.swift": 0.86, "OrthogonalRouter.swift": 0.29, "ScreenGeometry.swift": 1.0,
+      }],
+      "temp_0.md": 0.95,
+      "test-folders": [0.19, {
+        "02 Moria": [1.0, {
+          "Balin's Lost and Found": [0.45, { "axe.txt": 0.5 }], "Do not disturb the drums.txt": 0.9,
+          "Size Illusions": [0.05, { "big.png": 0.1 }], "Speak friend and enter.txt": 0.95,
+          "This mine passed inspection.txt": 0.7, "West Gate": [0.5, { "doors.txt": 0.6 }],
+        }],
+        "03 Rohan": [0.97, {
+          Edoras: [0.45, { "hall.txt": 0.5 }], "Horse 10.txt": 0.95, "Horse 2.txt": 0.98,
+          "Horse Parking": [0.0, { "stall-7.txt": 0.1 }], "Éomer attendance.csv": 0.66,
+        }],
+        "04 Gondor": [0.93, {
+          "Beacons maintenance schedule.ics": 0.68, "Minas Tirith": [0.02, { "levels.txt": 0.1 }],
+          "Steward succession plan.pdf": 0.97, "Where was Gondor!!.txt": 0.45,
+        }],
+        "05 Mordor": [0.88, {
+          ".eye-is-watching.log": 0.62,
+          "Mount Doom": [0.45, {
+            "Gollum slipped again.gif": 0.45, "Lava temperature.csv": 0.7,
+            "One Ring Returns Desk": [0.0, { "Claim form.pdf": 0.3, "Precious (do not open).txt": 0.9, "Returned rings.csv": 0.6 }],
+            "Ring disposal instructions.pdf": 0.97,
+          }],
+          "One does not simply file a permit.txt": 0.97,
+          "Orc Human Resources": [0.02, {
+            "Benefits enrollment.xlsx": 0.97,
+            Complaints: [0.0, { "Too much walking.txt": 0.5, "Uruk-hai overtime.csv": 0.8 }],
+            "Mandatory fun schedule.ics": 0.66,
+          }],
+          "Orc shift roster.csv": 0.7,
+        }],
+        "06 Fangorn": [0.68, {
+          "Entmoot Minutes": [0.02, { "Day 1 - Good morning.txt": 0.7, "Day 2 - Still morning.txt": 0.5, "Day 3 - Decision.md": 0.1 }],
+          "Quick decision making.txt": 0.66, "Treebeard voice memo.m4a": 0.95,
+        }],
+        "07 Isengard": [0.64, {
+          "Industrial tree removal plan.pdf": 0.97, "Palantír screen saver.png": 0.66,
+          "Saruman's Help Desk": [0.02, { "Ticket 1 - staff too short.txt": 0.97, "Ticket 10 - tower on fire.txt": 0.0, "Ticket 2 - smoke alarm.txt": 0.66 }],
+        }],
+        "08 The Prancing Pony": [0.5, { "Room 10 key.txt": 0.66, "Room 2 key.txt": 0.97, "Strider definitely normal.txt": 0.02 }],
+        "09 Paths of the Dead": [0.45, { "Ghost guestbook.txt": 0.97, "Oath renewal form.pdf": 0.02 }],
+        "10 Eagles (Availability Pending)": [0.12, { "Do not ask about the shortcut.txt": 0.02, "ETA unknown.txt": 0.97 }],
+        "99 The Grey Havens": [0.0, { "Last boat timetable.csv": 0.97, "Packing list - one wizard hat.txt": 0.02 }],
+      }],
+      Tests: [0.59, {
+        "AsyncConnectorTests.swift": 0.15, "AsyncFileBrowserModelTests.swift": 0.66, "HierarchyPreviewTests.swift": 0.02,
+        "HorizontalCenteringTests.swift": 0.95, "OrthogonalRouterTests.swift": 0.8, "RecentExpansionTests.swift": 0.5,
+        "ResponsivenessTests.swift": 0.75, "RouterResponsivenessTests.swift": 0.97, "TestMain.swift": 0.35,
+        "TreeNavigationTests.swift": 0.65,
+      }],
+    }],
+    lupa: [0.38, { "README.md": 0.3, src: [0.2, { "main.rs": 0.2 }] }],
+    mmacs: [0.74, { "init.el": 0.8 }],
+    remus: [0.9, { "wolf.txt": 0.9 }],
+    romulus: [0.94, { "wolf.txt": 0.94 }],
+    "SECRETS.md": 0.76,
+    uruk: [0.0, { "main.swift": 0.0 }],
+    "uruk-game": [0.68, { assets: [0.7, { "sprite.png": 0.7 }] }],
+  }],
+};
+
+export function buildFixture(root: string, now = Date.now()) {
+  rmSync(root, { recursive: true, force: true });
+  mkdirSync(root, { recursive: true });
+  const stamp = (p: string, t: number) => {
+    const when = new Date(now - ageForT(t));
+    utimesSync(p, when, when);
+  };
+  const walk = (dir: string, node: Tree) => {
+    for (const [name, spec] of Object.entries(node)) {
+      const p = join(dir, name);
+      if (typeof spec === "number") {
+        writeFileSync(p, `${name}\n`);
+        stamp(p, spec);
+      } else {
+        mkdirSync(p);
+        walk(p, spec[1]);
+        stamp(p, spec[0]); // after children: creating entries bumps the directory mtime
+      }
+    }
+  };
+  walk(root, tree);
+}
+
+if (import.meta.main) {
+  const root = resolve(import.meta.dir, "../fixtures/visual/Users");
+  buildFixture(root);
+  console.log(`fixture written to ${root}`);
+}

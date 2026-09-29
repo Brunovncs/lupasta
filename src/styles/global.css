@@ -1,0 +1,82 @@
+/* Iosevka's proportions (0.5em advance, tall cap height) match the reference font. The Medium cut is
+   served as the regular face: Windows' thinner rasterization otherwise reads lighter than the
+   macOS-rendered reference. */
+@font-face {
+  font-family: "Iosevka";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("../../node_modules/@fontsource/iosevka/files/iosevka-latin-500-normal.woff2") format("woff2");
+}
+
+:root {
+  --bg: #000;
+  --mono: "Iosevka", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  color-scheme: dark;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--mono);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+::-webkit-scrollbar {
+  display: none;
+}
+
+.scene {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  font-size: var(--font-size);
+  line-height: var(--row-h);
+}
+
+.scene .wires {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.scene .nodes {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.scene .node {
+  position: absolute;
+  left: 0;
+  top: var(--text-y);
+  height: var(--row-h);
+  white-space: pre;
+  font-kerning: none;
+  font-variant-ligatures: none;
+}
+
+.scene .ell {
+  display: inline-block;
+  width: 0.5em;
+  transform: scaleX(0.5);
+  transform-origin: left;
+}
+
+.scene .caret {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: #e60000;
+}
