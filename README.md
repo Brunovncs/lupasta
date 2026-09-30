@@ -5,6 +5,8 @@ tree view. Each column lists the siblings of one folder on the path to the curre
 the next columns preview what is inside the neighbouring folders. Everything is monospace text
 on black, joined by orthogonal connectors.
 
+![lupasta: navigating a folder tree, settings, search and going up a folder](docs/demo.gif)
+
 Text colour encodes age, not file type: names modified recently are white and fade through
 grey towards orange (on the selection path) or blue (in the previews) as they get older.
 
