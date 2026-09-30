@@ -1,4 +1,4 @@
-//! Backend benchmark: `cargo run --release --bin bench -- --root fixtures/bench-100k`
+//! Backend benchmark: `cargo run --release --no-default-features --example bench -- --root fixtures/bench-100k`
 //! Measures listing, index build, index load (startup), search latency, incremental updates
 //! and process memory. Prints a markdown table; numbers are whatever this machine produces.
 

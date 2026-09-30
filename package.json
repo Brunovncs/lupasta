@@ -17,7 +17,7 @@
     "fixture": "bun scripts/make-fixture.ts",
     "fixture:bench": "bun scripts/make-bench-fixture.ts",
     "icons": "bun scripts/make-icons.ts",
-    "bench": "cargo run --release --no-default-features --manifest-path src-tauri/Cargo.toml --bin bench --",
+    "bench": "cargo run --release --no-default-features --manifest-path src-tauri/Cargo.toml --example bench --",
     "tauri": "tauri",
     "dev:fixture": "bun scripts/make-fixture.ts && tauri dev -- -- --root ../fixtures/visual/Users --select drcode/file-browser/temp_0.md"
   },
