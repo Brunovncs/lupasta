@@ -617,19 +617,22 @@ mod tests {
 
     #[test]
     fn apply_paths_handles_create_modify_delete() {
-        let (root, _d, scope, index, corpus) = setup();
+        let (_r, _d, scope, index, corpus) = setup();
         scan(&scope, scope.root(), &index, &corpus, &ScanOptions::default(), true, &|_| {}).unwrap();
         let opts = ScanOptions::default();
+        // The watcher reports paths under the canonical root it watches; the tempdir path itself
+        // may not be canonical (/var -> /private/var on macOS, 8.3 short names on Windows CI).
+        let root = scope.root().to_path_buf();
 
-        let newdir = root.path().join("file-browser/Tests");
+        let newdir = root.join("file-browser/Tests");
         fs::create_dir_all(newdir.join("deep")).unwrap();
         fs::write(newdir.join("deep/RouterTests.swift"), "x").unwrap();
         let dirs = apply_paths(&scope, &index, &corpus, &opts, &[newdir.clone()]).unwrap();
         assert!(dirs.contains("file-browser"));
         assert!(index.get("file-browser/Tests/deep/RouterTests.swift").unwrap().is_some());
 
-        fs::write(root.path().join("file-browser/Sources/App.swift"), "123456789").unwrap();
-        apply_paths(&scope, &index, &corpus, &opts, &[root.path().join("file-browser/Sources/App.swift")]).unwrap();
+        fs::write(root.join("file-browser/Sources/App.swift"), "123456789").unwrap();
+        apply_paths(&scope, &index, &corpus, &opts, &[root.join("file-browser/Sources/App.swift")]).unwrap();
         assert_eq!(index.get("file-browser/Sources/App.swift").unwrap().unwrap().1, 9);
 
         fs::remove_dir_all(&newdir).unwrap();
