@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev xvfb
+
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: bun install --frozen-lockfile
+      - name: Type-check
+        run: bun run check
+      - name: Unit tests (TypeScript + Rust core)
+        run: bun run test
+
+      # A debug build with the frontend embedded (no dev server), then the real app is started
+      # against the fixture: it must lay out the tree, index it, find an entry by search and
+      # have a working filesystem watcher, or it exits non-zero.
+      - run: bun run fixture
+      - name: Build app
+        run: bun tauri build --debug --no-bundle
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: xvfb-run -a src-tauri/target/debug/lupasta --smoke --root fixtures/visual/Users --data-dir "$RUNNER_TEMP/smoke"
+      - name: Smoke test (macOS)
+        if: runner.os == 'macOS'
+        run: src-tauri/target/debug/lupasta --smoke --root fixtures/visual/Users --data-dir "$RUNNER_TEMP/smoke"
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process src-tauri\target\debug\lupasta.exe -ArgumentList '--smoke','--root','fixtures\visual\Users','--data-dir',"$env:RUNNER_TEMP\smoke" -PassThru -Wait -NoNewWindow
+          exit $p.ExitCode
+      - name: Smoke log
+        if: always()
+        shell: bash
+        run: cat "$RUNNER_TEMP/smoke/smoke.log" 2>/dev/null || echo "no smoke log"
