@@ -9,9 +9,31 @@
   src: url("../../node_modules/@fontsource/iosevka/files/iosevka-latin-500-normal.woff2") format("woff2");
 }
 
+/* Alternatives offered in settings. The renderer measures each one and sizes it so its advance
+   is still one 10 px cell (see src/styles/fonts.ts), so the layout geometry never changes. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("../../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-500-normal.woff2") format("woff2");
+}
+
 :root {
   --bg: #000;
-  --mono: "Iosevka", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --font-size: 20px;
+  --row-h: 16px;
+  --ell-scale: 0.5;
+  --font: "Iosevka";
+  --mono: var(--font), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   color-scheme: dark;
 }
 
@@ -69,8 +91,8 @@ body {
 
 .scene .ell {
   display: inline-block;
-  width: 0.5em;
-  transform: scaleX(0.5);
+  width: var(--char-w, 10px);
+  transform: scaleX(var(--ell-scale));
   transform-origin: left;
 }
 

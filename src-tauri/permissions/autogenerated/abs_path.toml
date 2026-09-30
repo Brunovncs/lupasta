@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-abs-path"
+description = "Enables the abs_path command without any pre-configured scope."
+commands.allow = ["abs_path"]
+
+[[permission]]
+identifier = "deny-abs-path"
+description = "Denies the abs_path command without any pre-configured scope."
+commands.deny = ["abs_path"]

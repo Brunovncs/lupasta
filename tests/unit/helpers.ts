@@ -1,6 +1,6 @@
 // In-memory filesystem + fake backend for unit tests.
 import { FLAG_DIR, TreeModel, type EntryTuple, type Listing } from "../../src/tree/model";
-import type { Backend } from "../../src/state/backend";
+import type { NavBackend } from "../../src/state/backend";
 
 export type FakeTree = { [name: string]: FakeTree | number }; // number = mtime of a file
 
@@ -56,8 +56,8 @@ export function fakeBackend(tree: FakeTree, initial: string | null = null, deny 
     openPath: async (p: string) => void calls.push(`open:${p}`),
     onFilesystemChanged: async () => () => {},
     onIndex: async () => [],
-  } satisfies Backend;
-  return { api: api as Backend, calls };
+  } satisfies NavBackend;
+  return { api: api as NavBackend, calls };
 }
 
 export const REF_TREE: FakeTree = {

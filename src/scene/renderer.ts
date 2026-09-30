@@ -56,9 +56,7 @@ export class SceneRenderer {
     this.nodeLayer.className = "nodes";
     this.nodeLayer.appendChild(this.caret);
     host.append(this.svg, this.nodeLayer);
-    host.style.setProperty("--font-size", `${m.fontSize}px`);
-    host.style.setProperty("--row-h", `${m.rowH}px`);
-    host.style.setProperty("--text-y", `${m.textY}px`);
+    this.applyMetrics();
     host.addEventListener("mousedown", (e) => {
       const el = (e.target as HTMLElement).closest<HTMLElement>("[data-id]");
       if (el) this.onPick(el.dataset.id!, e);
@@ -68,6 +66,14 @@ export class SceneRenderer {
       if (el) this.onPick(el.dataset.id!, e);
     });
     this.resize();
+  }
+
+  /** Re-reads font size, text offset and animation duration (after a settings change). */
+  applyMetrics() {
+    this.host.style.setProperty("--font-size", `${this.m.fontSize}px`);
+    this.host.style.setProperty("--row-h", `${this.m.rowH}px`);
+    this.host.style.setProperty("--text-y", `${this.m.textY}px`);
+    this.anim.duration = this.m.duration;
   }
 
   resize() {

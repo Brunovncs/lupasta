@@ -5,7 +5,7 @@
 //! stay inside the root, so crafted input like `../..`, `C:\`, `\\server\x` or ADS names
 //! (`a:stream`) is rejected before touching the disk.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -134,6 +134,19 @@ impl Scope {
     }
 }
 
+/// The form of an absolute path a person would type: `canonicalize()` returns verbatim paths on
+/// Windows (`\\?\C:\x`, `\\?\UNC\server\share`), which Explorer and most programs reject.
+pub fn display_path(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    if let Some(unc) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else if let Some(plain) = s.strip_prefix(r"\\?\") {
+        plain.to_string()
+    } else {
+        s.into_owned()
+    }
+}
+
 pub fn parent_rel(rel: &str) -> &str {
     rel.rfind('/').map(|i| &rel[..i]).unwrap_or("")
 }
@@ -156,7 +169,14 @@ fn os_hidden(meta: &fs::Metadata) -> bool {
     meta.file_attributes() & 0x2 != 0
 }
 
-#[cfg(not(windows))]
+/// `chflags hidden` (UF_HIDDEN), which is what hides `~/Library` in Finder.
+#[cfg(target_os = "macos")]
+fn os_hidden(meta: &fs::Metadata) -> bool {
+    use std::os::macos::fs::MetadataExt;
+    meta.st_flags() & 0x8000 != 0
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn os_hidden(_meta: &fs::Metadata) -> bool {
     false
 }
@@ -190,6 +210,47 @@ pub fn flags_for(name: &str, meta: &fs::Metadata, is_symlink: bool) -> u8 {
 /// `.gitignore`, `build`, `Info.plist`, `README.md`, ...).
 pub fn sort_entries(entries: &mut [Entry]) {
     entries.sort_by_cached_key(|e| (e.0.to_lowercase(), e.0.clone()));
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SortKey {
+    #[default]
+    Name,
+    /// Newest first.
+    Modified,
+    /// Largest first; folders (size 0) keep name order among themselves.
+    Size,
+}
+
+/// How a listing is presented: which entries are kept and in what order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListOptions {
+    pub show_hidden: bool,
+    pub sort: SortKey,
+    pub folders_first: bool,
+}
+
+impl Default for ListOptions {
+    fn default() -> Self {
+        ListOptions { show_hidden: true, sort: SortKey::Name, folders_first: false }
+    }
+}
+
+/// Filters and orders a name-sorted listing. Ties always fall back to name order.
+pub fn present(mut entries: Vec<Entry>, opts: &ListOptions) -> Vec<Entry> {
+    if !opts.show_hidden {
+        entries.retain(|e| e.1 & FLAG_HIDDEN == 0);
+    }
+    match opts.sort {
+        SortKey::Name => {}
+        SortKey::Modified => entries.sort_by(|a, b| b.2.total_cmp(&a.2)),
+        SortKey::Size => entries.sort_by_key(|e| std::cmp::Reverse(e.3)),
+    }
+    if opts.folders_first {
+        entries.sort_by_key(|e| !e.is_dir());
+    }
+    entries
 }
 
 pub fn entry_for(path: &Path, name: String) -> io::Result<Entry> {
@@ -262,6 +323,33 @@ mod tests {
         assert!(entries[0].1 & FLAG_HIDDEN != 0);
         assert!(entries[4].is_dir());
         assert_eq!(entries[1].3, 1);
+    }
+
+    #[test]
+    fn present_filters_hidden_and_sorts_stably() {
+        let e = |n: &str, flags: u8, mtime: f64, size: u64| Entry(n.into(), flags, mtime, size);
+        let listing = vec![
+            e(".env", FLAG_HIDDEN, 5.0, 10),
+            e("a.txt", 0, 1.0, 300),
+            e("b", FLAG_DIR, 3.0, 0),
+            e("c.txt", 0, 3.0, 300),
+            e("d", FLAG_DIR, 9.0, 0),
+        ];
+        let names = |v: Vec<Entry>| v.into_iter().map(|e| e.0).collect::<Vec<_>>();
+        assert_eq!(names(present(listing.clone(), &ListOptions::default())), [".env", "a.txt", "b", "c.txt", "d"]);
+        let hide = ListOptions { show_hidden: false, ..ListOptions::default() };
+        assert_eq!(names(present(listing.clone(), &hide)), ["a.txt", "b", "c.txt", "d"]);
+        let newest = ListOptions { sort: SortKey::Modified, ..ListOptions::default() };
+        assert_eq!(names(present(listing.clone(), &newest)), ["d", ".env", "b", "c.txt", "a.txt"]);
+        let largest = ListOptions { sort: SortKey::Size, folders_first: true, ..ListOptions::default() };
+        assert_eq!(names(present(listing, &largest)), ["b", "d", "a.txt", "c.txt", ".env"]);
+    }
+
+    #[test]
+    fn display_path_strips_verbatim_prefixes() {
+        assert_eq!(display_path(Path::new(r"\\?\C:\Users\x")), r"C:\Users\x");
+        assert_eq!(display_path(Path::new(r"\\?\UNC\srv\share\a")), r"\\srv\share\a");
+        assert_eq!(display_path(Path::new("/home/x")), "/home/x");
     }
 
     #[test]

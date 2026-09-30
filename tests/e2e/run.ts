@@ -1,7 +1,7 @@
 // End-to-end + visual regression against the real app.
 //   bun tests/e2e/run.ts            run, compare with baselines and reference frames
 //   bun tests/e2e/run.ts --update   also (re)write baselines
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildFixture } from "../../scripts/make-fixture";
 import { FIXTURE, ROOT, launch, press, screenshot, selected, settle } from "./harness";
@@ -176,6 +176,36 @@ try {
     return r.frames - f0;
   });
   check(frames > 5, `navigation animates (${frames} frames)`);
+
+  // Settings panel
+  await page.keyboard.press("Control+,");
+  check((await page.locator(".panel").count()) === 1, "Ctrl+, opens settings");
+  check((await page.locator(".panel .row.item.active").count()) === 1, "settings has a focused row");
+  await page.keyboard.press("Escape");
+  check((await page.locator(".panel").count()) === 0, "Escape closes settings");
+
+  // Hidden files: Ctrl+H re-lists every loaded folder, and the choice is persisted
+  const gi = `${FB}/.gitignore`;
+  const inModel = (id: string) => page.evaluate((i) => !!(window as any).__lupasta.ctl.model.get(i), id);
+  check(await inModel(gi), "hidden file listed by default");
+  await page.keyboard.press("Control+h");
+  check(await waitFor(page, async () => !(await inModel(gi))), "Ctrl+H hides dotfiles");
+  const saved = JSON.parse(readFileSync(join(app.dataDir, "settings.json"), "utf8"));
+  check(saved.show_hidden === false, "hidden-files setting saved to settings.json");
+  await page.keyboard.press("Control+h");
+  check(await waitFor(page, () => inModel(gi)), "Ctrl+H shows them again");
+
+  // Absolute paths for "copy path" are plain (no \\?\ verbatim prefix)
+  const abs: string = await page.evaluate((p) => (window as any).__lupasta.backend.absPath(p), FB);
+  check(abs.endsWith("file-browser") && !abs.startsWith("\\\\?\\"), `absolute path is readable (${abs})`);
+
+  // Left arrow on a top-level entry re-roots one folder up, with the old root selected
+  await page.evaluate(() => (window as any).__lupasta.ctl.select("drcode"));
+  await settle(page);
+  await page.keyboard.press("ArrowLeft");
+  const upRoot = () => page.evaluate(() => (window as any).__lupasta.backend.getRoot());
+  check(await waitFor(page, async () => (await upRoot()).name === "visual"), "← at the top goes up to the parent folder");
+  check(await waitFor(page, async () => (await selected(page)) === "Users"), "the previous root is selected after going up");
 } catch (e) {
   failures++;
   console.error(e);

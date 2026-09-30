@@ -16,13 +16,18 @@
     "test:e2e": "bun tests/e2e/run.ts",
     "fixture": "bun scripts/make-fixture.ts",
     "fixture:bench": "bun scripts/make-bench-fixture.ts",
+    "icons": "bun scripts/make-icons.ts",
     "bench": "cargo run --release --no-default-features --manifest-path src-tauri/Cargo.toml --bin bench --",
     "tauri": "tauri",
     "dev:fixture": "bun scripts/make-fixture.ts && tauri dev -- -- --root ../fixtures/visual/Users --select drcode/file-browser/temp_0.md"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/iosevka": "^5.3.0",
-    "@tauri-apps/api": "^2.9.0"
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-clipboard-manager": "^2.4.0",
+    "@tauri-apps/plugin-dialog": "^2.8.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",

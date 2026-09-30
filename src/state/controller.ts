@@ -3,7 +3,7 @@
 import { TreeModel, parentOf, type Listing } from "../tree/model";
 import { computeLayout, entryChildIndex, type Layout } from "../scene/layout";
 import type { Metrics } from "../scene/metrics";
-import type { Backend } from "./backend";
+import type { NavBackend } from "./backend";
 
 export interface LayoutSink {
   setLayout(layout: Layout, instant?: boolean): void;
@@ -17,9 +17,15 @@ export class Controller {
   private inflight = new Set<string>();
   private sink: LayoutSink | null = null;
   private wheelAcc = 0;
+  /** Bumped by init(): answers to requests made for a previous root are dropped. */
+  private epoch = 0;
+  wheelStep = 40;
   onChange: () => void = () => {};
+  onSelect: (id: string) => void = () => {};
+  /** Left arrow on a top-level entry: the shell may re-root one folder up. */
+  onLeaveRoot: () => void = () => {};
 
-  constructor(private api: Backend, private m: Metrics, private now: () => number = Date.now) {}
+  constructor(private api: NavBackend, private m: Metrics, private now: () => number = Date.now) {}
 
   attach(sink: LayoutSink) {
     this.sink = sink;
@@ -27,9 +33,15 @@ export class Controller {
   }
 
   async init() {
+    const epoch = ++this.epoch;
     const root = await this.api.getRoot();
+    const top = await this.api.listDirectory("");
+    if (epoch !== this.epoch) return;
     this.model = new TreeModel(root.name);
-    this.model.ingest(await this.api.listDirectory(""));
+    this.selectedId = "";
+    this.lastChild.clear();
+    this.inflight.clear();
+    this.model.ingest(top);
     const kids = this.model.children("") ?? [];
     if (root.initial && (await this.reveal(root.initial, true))) return;
     if (kids.length) this.select(kids[entryChildIndex(kids.length)].id);
@@ -53,11 +65,17 @@ export class Controller {
     this.selectedId = id;
     this.lastChild.set(parentOf(id), id);
     this.relayout(instant);
+    this.onSelect(id);
     void this.ensurePreview();
+  }
+
+  get selected() {
+    return this.model.get(this.selectedId);
   }
 
   /** Loads whatever the preview columns need for the current selection, then relayouts. */
   async ensurePreview() {
+    const epoch = this.epoch;
     for (let round = 0; round < 2; round++) {
       const sel = this.selectedId;
       const missing = this.model.missingForPreview(sel).filter((p) => !this.inflight.has(p));
@@ -65,6 +83,7 @@ export class Controller {
       missing.forEach((p) => this.inflight.add(p));
       try {
         const listings = await this.api.listDirectories(missing);
+        if (epoch !== this.epoch) return;
         const got = new Set(listings.map((l) => l.path));
         for (const p of missing) if (!got.has(p)) this.model.markUnreadable(p);
         if (this.ingest(listings)) this.relayout();
@@ -75,8 +94,10 @@ export class Controller {
   }
 
   async reveal(path: string, instant = false): Promise<boolean> {
+    const epoch = this.epoch;
     try {
       const chain = await this.api.revealPath(path);
+      if (epoch !== this.epoch) return false;
       this.ingest(chain);
     } catch {
       return false;
@@ -97,8 +118,11 @@ export class Controller {
     const node = this.model.get(this.selectedId);
     if (!node?.isDirectory) return;
     if (!node.loaded) {
+      const epoch = this.epoch;
       try {
-        this.ingest([await this.api.listDirectory(node.id)]);
+        const listing = await this.api.listDirectory(node.id);
+        if (epoch !== this.epoch) return;
+        this.ingest([listing]);
       } catch {
         this.model.markUnreadable(node.id);
         return;
@@ -114,6 +138,7 @@ export class Controller {
   leave() {
     const parent = parentOf(this.selectedId);
     if (parent) this.select(parent);
+    else if (this.selectedId) this.onLeaveRoot();
   }
 
   async activate() {
@@ -160,7 +185,7 @@ export class Controller {
 
   wheel(deltaY: number) {
     this.wheelAcc += deltaY;
-    const step = 40;
+    const step = this.wheelStep;
     while (Math.abs(this.wheelAcc) >= step) {
       const dir = Math.sign(this.wheelAcc);
       this.wheelAcc -= dir * step;
@@ -179,9 +204,11 @@ export class Controller {
 
   /** Watcher notification: reload the affected listings we actually hold. */
   async refresh(dirs: string[]) {
+    const epoch = this.epoch;
     const loaded = [...new Set(dirs)].filter((d) => this.model.get(d)?.loaded);
     if (!loaded.length) return;
     const listings = await this.api.listDirectories(loaded);
+    if (epoch !== this.epoch) return;
     // Folders that vanished come back missing from the batch; drop them via their parent.
     if (!this.ingest(listings)) return;
     let sel = this.selectedId;
@@ -190,5 +217,12 @@ export class Controller {
     this.selectedId = sel;
     this.relayout();
     void this.ensurePreview();
+  }
+
+  /** Lists every loaded folder again (after the hidden-files or sort setting changed). */
+  async reload() {
+    const loaded = [...this.model.nodes.values()].filter((n) => n.isDirectory && n.loaded).map((n) => n.id);
+    await this.refresh(loaded);
+    this.relayout();
   }
 }

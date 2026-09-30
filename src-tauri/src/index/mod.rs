@@ -10,8 +10,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicU8};
-use std::sync::{Mutex, OnceLock, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Directory names never indexed (navigation still shows them).
@@ -254,6 +254,17 @@ impl Index {
 
     /// Bulk build: drop the per-row FTS triggers and relax durability; `bulk_end` rebuilds the
     /// full-text index in one pass (far cheaper than row-by-row trigram inserts).
+    /// Drops every row (the next scan rebuilds from scratch, in bulk mode).
+    pub fn clear(&self) -> rusqlite::Result<()> {
+        let conn = self.writer.lock().unwrap();
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS files_ai; DROP TRIGGER IF EXISTS files_ad; DROP TRIGGER IF EXISTS files_au;
+             DELETE FROM files; INSERT INTO files_fts(files_fts) VALUES ('delete-all'); DELETE FROM meta;",
+        )?;
+        conn.execute_batch(TRIGGERS)?;
+        conn.execute_batch("VACUUM;")
+    }
+
     pub fn bulk_begin(&self) -> rusqlite::Result<()> {
         self.writer.lock().unwrap().execute_batch(
             "DROP TRIGGER IF EXISTS files_ai; DROP TRIGGER IF EXISTS files_ad; DROP TRIGGER IF EXISTS files_au; PRAGMA synchronous = OFF;",
@@ -324,11 +335,20 @@ pub struct Status {
 pub struct ScanOptions {
     pub respect_gitignore: bool,
     pub excludes: Vec<String>,
+    /// Set to stop a running scan early (e.g. the root changed). A cancelled scan keeps what it
+    /// wrote but purges nothing, since it did not see the whole tree.
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Default for ScanOptions {
     fn default() -> Self {
-        ScanOptions { respect_gitignore: true, excludes: DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect() }
+        ScanOptions { respect_gitignore: true, excludes: DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect(), cancel: None }
+    }
+}
+
+impl ScanOptions {
+    pub fn cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))
     }
 }
 
@@ -336,6 +356,7 @@ pub struct ScanStats {
     pub entries: u64,
     pub removed: u64,
     pub elapsed_ms: u64,
+    pub cancelled: bool,
 }
 
 /// Walks `start` (a path under the scope root) in parallel and upserts everything into the
@@ -352,6 +373,7 @@ pub fn scan(
     let t0 = Instant::now();
     let (tx, rx) = crossbeam_channel::bounded::<Record>(BATCH * 4);
     let excludes = opts.excludes.clone();
+    let cancel = opts.cancel.clone();
     let walker = ignore::WalkBuilder::new(start)
         .hidden(false)
         .parents(false)
@@ -368,7 +390,11 @@ pub fn scan(
         walker.run(|| {
             let tx = tx.clone();
             let scope = scope_c.clone();
+            let cancel = cancel.clone();
             Box::new(move |res| {
+                if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+                    return ignore::WalkState::Quit;
+                }
                 let Ok(entry) = res else { return ignore::WalkState::Continue };
                 if entry.depth() == 0 {
                     return ignore::WalkState::Continue;
@@ -426,7 +452,8 @@ pub fn scan(
     }
     progress(total);
 
-    let stale: Vec<i64> = known.into_keys().collect();
+    let cancelled = opts.cancelled();
+    let stale: Vec<i64> = if cancelled { Vec::new() } else { known.into_keys().collect() };
     if !stale.is_empty() {
         index.delete_ids(&stale)?;
         let mut c = corpus.write().unwrap();
@@ -434,7 +461,7 @@ pub fn scan(
             c.remove(*id);
         }
     }
-    Ok(ScanStats { entries: total, removed: stale.len() as u64, elapsed_ms: t0.elapsed().as_millis() as u64 })
+    Ok(ScanStats { entries: total, removed: stale.len() as u64, elapsed_ms: t0.elapsed().as_millis() as u64, cancelled })
 }
 
 /// Applies a coalesced set of changed absolute paths (from the watcher) to index + corpus.
@@ -546,6 +573,24 @@ mod tests {
         assert_eq!(index.count(), 4);
         assert_eq!(index.get("file-browser/Sources/App.swift").unwrap().unwrap().1, 6);
         assert_eq!(corpus.read().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn cancelled_scan_purges_nothing_and_clear_empties() {
+        let (_r, _d, scope, index, corpus) = setup();
+        scan(&scope, scope.root(), &index, &corpus, &ScanOptions::default(), true, &|_| {}).unwrap();
+        assert_eq!(index.count(), 5);
+        let opts = ScanOptions { cancel: Some(Arc::new(AtomicBool::new(true))), ..ScanOptions::default() };
+        let stats = scan(&scope, scope.root(), &index, &corpus, &opts, true, &|_| {}).unwrap();
+        assert!(stats.cancelled);
+        assert_eq!(stats.removed, 0);
+        assert_eq!(index.count(), 5);
+
+        index.clear().unwrap();
+        assert_eq!(index.count(), 0);
+        assert!(index.fts_candidates("router", 10).unwrap().unwrap().is_empty());
+        scan(&scope, scope.root(), &index, &corpus, &ScanOptions::default(), true, &|_| {}).unwrap();
+        assert_eq!(index.fts_candidates("router", 10).unwrap().unwrap().len(), 1);
     }
 
     #[test]

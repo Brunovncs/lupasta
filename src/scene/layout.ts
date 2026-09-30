@@ -8,7 +8,7 @@
 // Each preview group is centered on its parent row; groups are then pushed apart (one blank
 // row between them) outward from the group closest to the focus row, which stays centered.
 import type { TreeModel, Node } from "../tree/model";
-import { ageT, colorFor, type Hue } from "../styles/palette";
+import { ageT, colorEpoch, colorFor, type Hue } from "../styles/palette";
 import type { Metrics } from "./metrics";
 import { laneOverflow } from "./router";
 
@@ -114,7 +114,9 @@ export function measure(n: Node, max: number): Measure {
 }
 
 const colorCache = new Map<string, string>();
+let cacheEpoch = colorEpoch;
 function cachedColor(n: Node, now: number, hue: Hue): string {
+  if (cacheEpoch !== colorEpoch) (colorCache.clear(), (cacheEpoch = colorEpoch));
   const t = ageT(n.mtime, now);
   const key = `${hue}|${n.type}|${Math.round(t * 1024)}`;
   let c = colorCache.get(key);

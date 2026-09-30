@@ -1,8 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: event bus plus the app's filesystem commands. No generic fs/shell plugins are exposed.",
-  "windows": ["main"],
+  "description": "Main window: event bus, the app's own filesystem commands, a folder picker, writing text to the clipboard and webview zoom. No generic fs/shell plugins are exposed.",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:event:default",
     "allow-get-root",
@@ -15,6 +17,21 @@
     "allow-index-status",
     "allow-start-indexing",
     "allow-reveal-path",
-    "allow-open-path"
+    "allow-open-path",
+    "allow-clear-index",
+    "allow-reveal-in-os",
+    "allow-abs-path",
+    "allow-get-settings",
+    "allow-set-settings",
+    "allow-remember-selection",
+    "allow-set-root",
+    "allow-app-info",
+    "allow-open-data-dir",
+    "allow-check-update",
+    "allow-open-release",
+    "allow-smoke-report",
+    "core:webview:allow-set-webview-zoom",
+    "dialog:allow-open",
+    "clipboard-manager:allow-write-text"
   ]
 }

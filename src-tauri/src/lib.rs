@@ -1,6 +1,8 @@
 pub mod filesystem;
 pub mod index;
 pub mod search;
+pub mod settings;
+pub mod update;
 pub mod watcher;
 
 #[cfg(feature = "app")]

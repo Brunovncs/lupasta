@@ -35,12 +35,25 @@ const RAMPS: Record<Hue, [number, string][]> = {
   preview: [[0, "#fcfcfc"], [0.5, "#82808a"], [0.66, "#5c50a8"], [0.86, "#2410d4"], [1, "#0000ec"]],
 };
 
-export const colorMode: ColorMode = "age";
+export let colorMode: ColorMode = "age";
 
 // Age curve: log-scale between AGE_MIN (t = 0) and AGE_MAX (t = 1).
 export const AGE_MIN_MS = 10 * 60 * 1000;
-export const AGE_MAX_MS = 2 * 365 * 24 * 3600 * 1000;
-const LOG_SPAN = Math.log(AGE_MAX_MS / AGE_MIN_MS);
+export const DEFAULT_AGE_MAX_MS = 2 * 365 * 24 * 3600 * 1000;
+export let AGE_MAX_MS = DEFAULT_AGE_MAX_MS;
+let LOG_SPAN = Math.log(AGE_MAX_MS / AGE_MIN_MS);
+/** Bumped whenever the colour rules change, so caches keyed on it go stale. */
+export let colorEpoch = 0;
+
+/** Applies user settings: colour by age or by kind, and how old "fully saturated" is. */
+export function configureColors(opts: { mode: ColorMode; ageMaxMs: number }) {
+  const max = Math.max(AGE_MIN_MS * 2, opts.ageMaxMs);
+  if (opts.mode === colorMode && max === AGE_MAX_MS) return;
+  colorMode = opts.mode;
+  AGE_MAX_MS = max;
+  LOG_SPAN = Math.log(AGE_MAX_MS / AGE_MIN_MS);
+  colorEpoch++;
+}
 
 export function ageT(mtimeMs: number, now: number): number {
   const age = now - mtimeMs;

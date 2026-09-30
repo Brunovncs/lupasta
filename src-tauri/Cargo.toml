@@ -24,7 +24,14 @@ path = "src/bin/bench.rs"
 # `app` adds the Tauri shell and the IPC commands.
 [features]
 default = ["app"]
-app = ["dep:tauri", "dep:tauri-build"]
+app = [
+  "dep:tauri",
+  "dep:tauri-build",
+  "dep:tauri-plugin-dialog",
+  "dep:tauri-plugin-clipboard-manager",
+  "dep:tauri-plugin-window-state",
+  "dep:ureq",
+]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
@@ -38,6 +45,10 @@ nucleo-matcher = "0.3"
 notify = "8"
 ignore = "0.4"
 crossbeam-channel = "0.5"
+tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-clipboard-manager = { version = "2", optional = true }
+tauri-plugin-window-state = { version = "2", optional = true }
+ureq = { version = "3", features = ["json"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

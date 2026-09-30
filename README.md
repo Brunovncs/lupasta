@@ -8,13 +8,14 @@ on black, joined by orthogonal connectors.
 Text colour encodes age, not file type: names modified recently are white and fade through
 grey towards orange (on the selection path) or blue (in the previews) as they get older.
 
-Built with Tauri 2, Rust and Svelte 5. It runs on Windows, and should run on macOS and Linux
-(the Rust side is portable; only Windows has been tested).
+Built with Tauri 2, Rust and Svelte 5. It is developed on Windows; CI builds it and runs a smoke
+test of the real app on Windows, macOS and Linux on every push.
 
 ## Running it
 
-You need Rust, [Bun](https://bun.sh) and the platform webview (WebView2 on Windows, which
-ships with Windows 11).
+You need Rust, [Bun](https://bun.sh) and the platform webview: WebView2 on Windows (ships with
+Windows 11), WKWebView on macOS, WebKitGTK 4.1 on Linux (`libwebkit2gtk-4.1-dev` and the other
+[Tauri prerequisites](https://tauri.app/start/prerequisites/)).
 
 ```sh
 bun install
@@ -23,13 +24,14 @@ bun run dev:fixture        # opens the synthetic fixture used by the tests
 bun tauri build            # release build and installer
 ```
 
-On Windows the project is pinned to the GNU toolchain (`rust-toolchain.toml`), so a MinGW gcc
-must be on `PATH` to compile the bundled SQLite; [WinLibs](https://winlibs.com) works
-(`winget install BrechtSanders.WinLibs.POSIX.MSVCRT`). Delete `rust-toolchain.toml` to use the
-MSVC toolchain instead.
+Any stable Rust toolchain works. On Windows without the Visual Studio build tools you can use the
+GNU toolchain for this folder only (`rustup override set stable-x86_64-pc-windows-gnu`); it needs
+a MinGW gcc on `PATH` to compile the bundled SQLite, which [WinLibs](https://winlibs.com)
+provides (`winget install BrechtSanders.WinLibs.POSIX.MSVCRT`).
 
 The executable takes `--root <dir>` and `--select <path relative to root>`. With no arguments
-it opens the parent of your home directory with the home directory selected.
+it reopens the last place you were in, or the parent of your home directory with the home
+directory selected.
 
 ## Using it
 
@@ -37,12 +39,27 @@ it opens the parent of your home directory with the home directory selected.
 |---|---|
 | `↑` `↓` | move within the column (also the mouse wheel) |
 | `→` `Space` | enter the selected folder |
-| `←` | back to the parent |
+| `←` | back to the parent; on a top-level entry, go up to the folder above the root |
 | `Enter` | enter a folder, open a file with the default application |
 | `/` or `Ctrl+K` | search |
-| `Esc` | close search |
+| `Ctrl+C` | copy the full path of the selection |
+| `Ctrl+E` | show the selection in Explorer / Finder / the file manager |
+| `Ctrl+H` | show or hide hidden files |
+| `Ctrl+O` | open another folder |
+| `Ctrl+=` `Ctrl+-` `Ctrl+0` | zoom |
+| `Ctrl+,` | settings |
+| `Esc` | close search or settings |
 
-Clicking any name, including names in the preview columns, selects it.
+Clicking any name, including names in the preview columns, selects it. Moving the pointer to
+the top edge reveals a bar with the current folder, search and settings.
+
+Settings are kept in `settings.json` in the app data folder: colour by age or by kind and how
+old the oldest colour is, font (Iosevka, JetBrains Mono, IBM Plex Mono or the system monospace,
+each sized to the same 10 px cell so the layout does not change), zoom, animation speed,
+truncation, a status line with the selection's size and age, hidden files, sort order, folders
+first, wheel speed, reopening the last place, recent folders, and what the search index skips.
+"Check for updates" asks GitHub for the latest release and links to it; nothing is downloaded
+or installed automatically.
 
 Search is fuzzy and matches names and paths: `rtr` finds `OrthogonalRouter.swift`,
 `mordor roster` finds `05 Mordor/Orc shift roster.csv`. Picking a result opens the path to it.
@@ -76,11 +93,25 @@ bun run test        # TypeScript unit tests and Rust tests
 bun run test:e2e    # drives the real app through WebView2's DevTools protocol (Windows)
 ```
 
+`bun tauri build --debug --no-bundle` followed by `lupasta --smoke --root fixtures/visual/Users`
+runs the real app once and exits 0 only if it laid out the tree, indexed it, found an entry by
+search and has a working filesystem watcher; CI runs this on all three platforms.
+
 The unit tests include a sweep over every possible selection in the fixture, checking that no
 names overlap and no connector crosses another or runs through text. The end-to-end run
 navigates with keyboard and mouse, searches, edits files on disk to exercise the watcher, and
 compares 13 screenshots at 1812×1344 against local baselines in `screenshots/baseline`. The
 first run records them; `bun run test:e2e -- --update` rewrites them.
+
+## Icons and releases
+
+`bun run icons` regenerates every icon in `src-tauri/icons` from `scripts/make-icons.ts`: a vector
+master for the large sizes and hand-placed pixel drawings for 16, 24, 32 and 48 px, rasterised
+with a local Chromium and packed into `.ico` and `.icns`.
+
+Pushing a tag such as `v0.2.0` (matching the version in `tauri.conf.json`) builds installers for
+Windows, macOS (universal) and Linux into a draft GitHub release. The builds are not code-signed,
+so SmartScreen and Gatekeeper will warn on first launch.
 
 ## Performance
 
@@ -96,7 +127,11 @@ are in [docs/benchmarks.md](docs/benchmarks.md).
   emoji) are only approximately aligned.
 - The webview dominates memory use: about 400 MB for the whole process tree on Windows, most of
   it WebView2.
-- `.git`, `node_modules`, `target` and `AppData` are browsable but not indexed for search.
+- `.git`, `node_modules`, `target` and `AppData` are browsable but not indexed for search (the
+  list is editable in settings).
+- Live updates watch the whole root recursively. On Linux a large root can exceed the inotify
+  watch limit (`fs.inotify.max_user_watches`); browsing still works and settings say so. On
+  macOS, indexing a home folder triggers the system prompts for Desktop, Documents and Downloads.
 
 ## License
 

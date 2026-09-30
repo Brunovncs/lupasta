@@ -73,7 +73,7 @@
     position: fixed;
     left: 20px;
     top: 16px;
-    font-size: 20px;
+    font-size: var(--font-size);
     line-height: 16px;
     color: #fcfcfc;
     background: #000;
