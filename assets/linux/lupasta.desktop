@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=lupasta
+Comment=Spatial filesystem browser
+Exec=lupasta
+Icon=lupasta
+Categories=Utility;FileManager;

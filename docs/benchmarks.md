@@ -3,18 +3,21 @@
 Measured on one Windows 11 machine (release builds). Reproduce with:
 
 ```sh
-bun run fixture:bench                               # writes fixtures/bench-10k, -100k, -500k
-bun run bench --root fixtures/bench-500k            # core: index, search, watcher, memory
-bun tests/e2e/bench.ts                              # app: startup, expansion, frame pacing
+cargo run --release --example bench_fixture                # writes fixtures/bench-10k, -100k, -500k
+cargo run --release --example bench -- --root fixtures/bench-500k   # core: index, search, watcher, memory
+cargo run --release --example layout_bench                 # layout + routing per keystroke
 ```
 
+(Without the Windows SDK, use `--profile local` instead of `--release`; see the README.)
+
 The bench fixtures are deterministic trees of empty files (8 folders and 40 files per folder)
-plus `wide/`, one flat folder with up to 20,000 files.
+plus `wide/`, one flat folder with up to 20,000 files. The generator produces the same names
+as the TypeScript script the numbers below were first measured with.
 
 These runs predate a change that dropped paths from the FTS5 index (names only; paths are
 matched by the in-memory fuzzy scan). That change shrank the database from 7.4 / 70.8 / 372 MB
 to 3.3 / 33.9 / 161 MB for 10k / 100k / 500k entries. Timings have not been re-measured on an
-idle machine since.
+idle machine since. The core is the same code in the GPUI build.
 
 ## Core
 
@@ -88,21 +91,24 @@ idle machine since.
 | memory: baseline / after build / after reload | 4.2 / 87.8 / 80.1 MB |
 
 ## App
-Windows 11, WebView2, 240 Hz monitor (frame interval ≈ 4.2 ms), 906×672 window at DPR 2.
-"select widest dir" = the directory with the most children (`wide/` in the bench fixtures):
-its listing arrives and its children appear as a preview column. "enter it" = ArrowRight into
-that directory, so the whole 20k-entry list becomes the selection column.
 
-| fixture | startup (spawn→first layout) | select widest dir | enter it | layout cost while navigating | frame pacing (ArrowDown ×25) | search round-trip p50 | memory |
-|---|---|---|---|---|---|---|---|
-| visual/Users | 1219.2 ms | 10 kids: list 0.4 ms, frame 0.9 ms | 36 laid out / 38 in DOM, frame 2.0 ms | layout p50 0.6 / max 0.7 ms | frames p50 4.2 / p95 4.3 / max 4.3 ms, 0 >20ms of 471 | router 1.3, rtr 1.2, readme 1.2, a 1.1 ms | heap 4.7 MB, process tree 392.7 MB |
-| bench-10k | 869.8 ms | 1000 kids: list 1.8 ms, frame 4.0 ms | 290 laid out / 78 in DOM, frame 1.6 ms | layout p50 0.6 / max 1.0 ms | frames p50 4.2 / p95 4.3 / max 4.7 ms, 0 >20ms of 472 | router 4.0, rtr 1.5, readme 2.2, a 2.7 ms | heap 9.2 MB, process tree 427.3 MB |
-| bench-100k | 912.3 ms | 10000 kids: list 3.5 ms, frame 4.9 ms | 290 laid out / 78 in DOM, frame 2.7 ms | layout p50 1.9 / max 3.7 ms | frames p50 4.2 / p95 4.3 / max 4.3 ms, 0 >20ms of 482 | router 6.7, rtr 11.0, readme 4.2, a 5.9 ms | heap 13.1 MB, process tree 453.3 MB |
-| bench-500k | 910.6 ms | 20000 kids: list 7.1 ms, frame 7.9 ms | 290 laid out / 78 in DOM, frame 6.8 ms | layout p50 4.0 / max 6.2 ms | frames p50 4.2 / p95 4.3 / max 4.3 ms, 0 >20ms of 498 | router 11.7, rtr 15.6, readme 6.7, a 14.6 ms | heap 19.7 MB, process tree 461.1 MB |
+Windows 11, GPUI build (v0.2.0) against the Tauri 2 + WebView2 build (v0.1.0), both release
+builds, a 906×672 window at 125 % scaling, measured 20 s after start-up with a fresh data folder
+(so the index has been built). "Process tree" is the sum over lupasta.exe and every child
+process; the Tauri build runs six WebView2 processes besides its own.
 
-Before layout virtualization (same machine, same fixtures) the 500k/20k-column row was:
-layout p50 17.0 / max 27.8 ms per keystroke, 8 frames >20 ms of 506, JS heap 86.9 MB,
-first frame after expanding `wide/` 40.3 ms.
+| fixture | GPUI: processes, working set / private | Tauri: processes, working set / private |
+|---|---|---|
+| visual/Users | 1, 72 / 91 MB | 7, 374 / 217 MB |
+| bench-10k | 1, 82 / 108 MB | 7, 385 / 290 MB |
+| bench-100k | 1, 88 / 114 MB | 7, 409 / 254 MB |
+| bench-500k | 1, 147 / 174 MB | 7, 482 / 339 MB |
 
-"process tree" is lupasta.exe plus every WebView2 child process (browser, GPU, renderer,
-utility); the WebView2 runtime alone accounts for ~350 MB of it on this machine.
+Layout and connector routing per keystroke in a 20,000-entry folder (`layout_bench`, a
+synthetic folder with every 50th entry a sub-folder of 20 files): median 3.3 ms, p95 4.7 ms.
+The Tauri build measured layout p50 4.0 / max 6.2 ms for the same size of folder in the app
+(bench-500k, `wide/` entered), so the two are comparable rather than identical setups.
+
+The Tauri build's frame-pacing, startup and per-step timings came from driving WebView2 through
+its DevTools protocol; that harness has no GPUI counterpart yet, so those columns are not
+reproduced here.

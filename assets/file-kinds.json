@@ -1,0 +1,11 @@
+{
+  "$comment": "Single source of truth for file classification. Compiled into the index (include_str!) and the palette.",
+  "kinds": {
+    "code": ["swift", "rs", "ts", "tsx", "js", "jsx", "mjs", "svelte", "go", "py", "rb", "c", "h", "cpp", "hpp", "cs", "java", "kt", "lua", "sh", "ps1", "bat", "zig", "sql", "html", "css", "scss", "vue"],
+    "text": ["txt", "md", "log", "csv", "tsv", "json", "toml", "yaml", "yml", "xml", "ini", "cfg", "conf", "plist", "ics", "env", "lock"],
+    "image": ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "heic", "tiff", "avif"],
+    "document": ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "rtf", "epub", "pages", "numbers", "key"],
+    "binary": ["exe", "dll", "so", "dylib", "bin", "o", "a", "lib", "zip", "gz", "tar", "7z", "rar", "iso", "dmg", "m4a", "mp3", "wav", "flac", "mp4", "mov", "mkv", "sqlite", "db", "wasm"]
+  },
+  "special": [".git", ".gitignore", ".localized", ".DS_Store", "Info.plist", "README.md", "SECRETS.md", "LICENSE", "Makefile", "Dockerfile"]
+}
