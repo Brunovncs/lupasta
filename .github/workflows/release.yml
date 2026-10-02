@@ -1,7 +1,8 @@
 name: release
 
-# Push a tag like v0.2.0 (matching the version in tauri.conf.json) to build installers for every
-# platform into a draft GitHub release. Publishing the draft is what the in-app update check sees.
+# Push a tag like v0.2.0 (matching the version in Cargo.toml) to build every platform into a draft
+# GitHub release. Publishing the draft is what the in-app update check sees. Builds are not
+# code-signed, so SmartScreen and Gatekeeper warn on first launch.
 on:
   push:
     tags: ["v*"]
@@ -11,17 +12,21 @@ permissions:
   contents: write
 
 jobs:
+  create:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || gh release create "${{ github.ref_name }}" --draft --title "lupasta ${{ github.ref_name }}" --notes ""
+
   build:
+    needs: create
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            args: ""
-          - os: macos-latest
-            args: "--target universal-apple-darwin"
-          - os: ubuntu-22.04
-            args: ""
+        os: [windows-latest, macos-latest, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -30,25 +35,46 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev
 
-      - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
-      - run: bun install --frozen-lockfile
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --release
+          New-Item -ItemType Directory dist | Out-Null
+          Compress-Archive -Path target\release\lupasta.exe -DestinationPath "dist\lupasta-${{ github.ref_name }}-windows-x64.zip"
 
-      - uses: tauri-apps/tauri-action@v0
+      - name: Package (macOS, universal .app)
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          app=dist/lupasta.app/Contents
+          mkdir -p "$app/MacOS" "$app/Resources"
+          lipo -create -output "$app/MacOS/lupasta" target/aarch64-apple-darwin/release/lupasta target/x86_64-apple-darwin/release/lupasta
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          sed "s/VERSION/$version/g" assets/macos/Info.plist > "$app/Info.plist"
+          cp assets/icons/icon.icns "$app/Resources/"
+          (cd dist && zip -qry "lupasta-${{ github.ref_name }}-macos-universal.zip" lupasta.app)
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --release
+          pkg=dist/lupasta-${{ github.ref_name }}-linux-x64
+          mkdir -p "$pkg"
+          cp target/release/lupasta assets/linux/lupasta.desktop "$pkg/"
+          cp assets/icons/128x128.png "$pkg/lupasta.png"
+          tar -C dist -czf "$pkg.tar.gz" "$(basename "$pkg")"
+
+      - name: Upload to the draft release
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: lupasta ${{ github.ref_name }}
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" $(ls dist/*.zip dist/*.tar.gz 2>/dev/null) --clobber

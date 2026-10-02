@@ -1,0 +1,59 @@
+[package]
+name = "lupasta"
+version = "0.2.0"
+description = "Spatial filesystem browser"
+license = "MIT"
+repository = "https://github.com/Brunovncs/lupasta"
+edition = "2024"
+rust-version = "1.97"
+
+[lib]
+name = "lupasta"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lupasta"
+path = "src/main.rs"
+
+[dependencies]
+# GPUI is published by the gpui-kit maintainers as `gpui-pre-*` snapshots of Zed; the crate
+# names inside are still `gpui` and `gpui_platform`. The official `gpui` on crates.io is 0.2.2.
+gpui = { package = "gpui-pre", version = "=0.3.7" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.7" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+nucleo-matcher = "0.3"
+notify = "8"
+ignore = "0.4"
+crossbeam-channel = "0.5"
+ureq = { version = "3", features = ["json"] }
+dirs = "6"
+async-channel = "2"
+filetime = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# `cargo build --profile local`: a release build for machines without the Windows SDK. GPUI's
+# Windows backend precompiles its shaders with fxc.exe in release builds; with debug assertions
+# on for that one crate (and its build script) it compiles them at startup instead.
+[profile.local]
+inherits = "release"
+
+[profile.local.package.gpui-pre-windows]
+debug-assertions = true
+
+[profile.local.build-override]
+debug-assertions = true
+
+[build-dependencies]
+embed-resource = "3"

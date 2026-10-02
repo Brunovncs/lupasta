@@ -37,7 +37,7 @@ four different colours in the recording, and a folder changes hue depending on w
 it is in. The ramp is continuous on a log scale from 10 minutes to two years: white, then grey,
 then saturated orange (`#f06c04`) on the selection path or blue (`#0000ec`, through violet) in
 previews. The stops were sampled from glyph pixels. A type-based palette is kept as an
-alternative mode in `src/styles/palette.ts`, driven by the same `file-kinds.json` the Rust
+alternative mode in `src/palette.rs`, driven by the same `assets/file-kinds.json` the search
 index uses.
 
 The selection is a red block (`#e60000`) behind the first character.
@@ -46,14 +46,14 @@ The selection is a red block (`#e60000`) behind the first character.
 
 The glyph proportions (half-em advance, tall cap height) match Iosevka, which is bundled.
 The Medium cut is used as the regular weight because Windows rasterises thinner than the
-macOS text in the recording. Iosevka draws `…` two cells wide; the renderer squeezes it into
-one, as in the original.
+macOS text in the recording. Iosevka draws `…` two cells wide; lupasta draws it as three dots
+inside one cell, as in the original.
 
 ## Where lupasta differs
 
 - **Animation.** The recording has none: every change happens within a single frame. lupasta
-  interpolates positions and the camera over 240 ms. Set `duration: 0` in
-  `src/scene/metrics.ts` to match the original.
+  interpolates positions and the camera over 240 ms. Set animation to "off" in settings to
+  match the original.
 - **Routing around long names.** The original threads connectors a few pixels apart around
   overhanging names and lands them on group edges. lupasta tries a detour and a landing route,
   and widens the column when neither fits. This is always crossing-free, but wider than the
