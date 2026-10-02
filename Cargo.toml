@@ -19,7 +19,8 @@ path = "src/main.rs"
 # GPUI is published by the gpui-kit maintainers as `gpui-pre-*` snapshots of Zed; the crate
 # names inside are still `gpui` and `gpui_platform`. The official `gpui` on crates.io is 0.2.2.
 gpui = { package = "gpui-pre", version = "=0.3.7" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.7" }
+# x11 + wayland: without them the Linux backend has no way to open a window.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.7", features = ["x11", "wayland", "font-kit"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
