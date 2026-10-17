@@ -1,6 +1,6 @@
 [package]
 name = "lupasta"
-version = "0.2.0"
+version = "0.2.1"
 description = "Spatial filesystem browser"
 license = "MIT"
 repository = "https://github.com/Brunovncs/lupasta"
