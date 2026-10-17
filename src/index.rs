@@ -160,6 +160,14 @@ END;
 /// Bump to rebuild existing index files (v3: FTS on names only).
 const SCHEMA_VERSION: i64 = 3;
 
+fn trigger_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?1)", [name], |r| r.get(0))
+}
+
+fn files_has_rows(conn: &Connection) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT EXISTS(SELECT 1 FROM files)", [], |r| r.get(0))
+}
+
 impl Index {
     pub fn open(path: &Path) -> rusqlite::Result<Index> {
         let writer = Connection::open(path)?;
@@ -169,7 +177,14 @@ impl Index {
             writer.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
         }
         writer.execute_batch(SCHEMA)?;
+        // A bulk build (see `bulk_begin`) deliberately drops the FTS triggers while it writes.
+        // If the process died in between, `files` has rows the triggers never saw, and the
+        // resync diff skips unchanged rows, so the gap would be permanent: rebuild FTS once.
+        let interrupted = !trigger_exists(&writer, "files_ai")? && files_has_rows(&writer)?;
         writer.execute_batch(TRIGGERS)?;
+        if interrupted {
+            writer.execute_batch("INSERT INTO files_fts(files_fts) VALUES ('rebuild');")?;
+        }
         let reader = Connection::open(path)?;
         reader.execute_batch("PRAGMA query_only = ON;")?;
         Ok(Index { writer: Mutex::new(writer), reader: Mutex::new(reader) })
@@ -218,24 +233,32 @@ impl Index {
             let rows = stmt.query_map([path_id(rel)], |r| r.get(0))?;
             rows.collect::<Result<_, _>>()?
         };
-        {
-            let mut del = tx.prepare_cached("DELETE FROM files WHERE id = ?1")?;
-            for id in &ids {
-                del.execute([id])?;
-            }
+        if !ids.is_empty() {
+            // One statement for the whole subtree. The FTS delete trigger still fires per row,
+            // but a `rm -rf` of a large tree no longer runs one DELETE statement per row.
+            tx.execute(
+                "WITH RECURSIVE sub(id) AS (SELECT id FROM files WHERE id = ?1
+                   UNION ALL SELECT f.id FROM files f JOIN sub ON f.parent_id = sub.id)
+                 DELETE FROM files WHERE id IN (SELECT id FROM sub)",
+                [path_id(rel)],
+            )?;
         }
         tx.commit()?;
         Ok(ids)
     }
 
+    /// Deletes ids in chunks of one statement instead of a statement per row.
     pub fn delete_ids(&self, ids: &[i64]) -> rusqlite::Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        const CHUNK: usize = 500;
         let mut conn = self.writer.lock().unwrap();
         let tx = conn.transaction()?;
-        {
-            let mut stmt = tx.prepare_cached("DELETE FROM files WHERE id = ?1")?;
-            for id in ids {
-                stmt.execute([id])?;
-            }
+        for chunk in ids.chunks(CHUNK) {
+            let placeholders = (1..=chunk.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",");
+            let mut stmt = tx.prepare_cached(&format!("DELETE FROM files WHERE id IN ({placeholders})"))?;
+            stmt.execute(rusqlite::params_from_iter(chunk.iter()))?;
         }
         tx.commit()
     }
@@ -253,19 +276,29 @@ impl Index {
         Ok(out)
     }
 
-    /// Bulk build: drop the per-row FTS triggers and relax durability; `bulk_end` rebuilds the
-    /// full-text index in one pass (far cheaper than row-by-row trigram inserts).
     /// Drops every row (the next scan rebuilds from scratch, in bulk mode).
     pub fn clear(&self) -> rusqlite::Result<()> {
         let conn = self.writer.lock().unwrap();
-        conn.execute_batch(
-            "DROP TRIGGER IF EXISTS files_ai; DROP TRIGGER IF EXISTS files_ad; DROP TRIGGER IF EXISTS files_au;
-             DELETE FROM files; INSERT INTO files_fts(files_fts) VALUES ('delete-all'); DELETE FROM meta;",
-        )?;
-        conn.execute_batch(TRIGGERS)?;
+        // One transaction: a crash must not leave the triggers dropped or FTS out of step with
+        // the (emptied) table. VACUUM cannot run inside one, so it follows.
+        let cleared = conn.execute_batch(&format!(
+            "BEGIN;
+             DROP TRIGGER IF EXISTS files_ai; DROP TRIGGER IF EXISTS files_ad; DROP TRIGGER IF EXISTS files_au;
+             DELETE FROM files; INSERT INTO files_fts(files_fts) VALUES ('delete-all'); DELETE FROM meta;
+             {TRIGGERS}
+             COMMIT;"
+        ));
+        if let Err(e) = cleared {
+            // Never leave the connection inside a half-open transaction: every later write
+            // would fail with "cannot start a transaction within a transaction".
+            let _ = conn.execute_batch("ROLLBACK;");
+            return Err(e);
+        }
         conn.execute_batch("VACUUM;")
     }
 
+    /// Bulk build: drop the per-row FTS triggers and relax durability; `bulk_end` rebuilds the
+    /// full-text index in one pass (far cheaper than row-by-row trigram inserts).
     pub fn bulk_begin(&self) -> rusqlite::Result<()> {
         self.writer.lock().unwrap().execute_batch(
             "DROP TRIGGER IF EXISTS files_ai; DROP TRIGGER IF EXISTS files_ad; DROP TRIGGER IF EXISTS files_au; PRAGMA synchronous = OFF;",
@@ -430,29 +463,37 @@ pub fn scan(
         batch.clear();
         Ok(())
     };
-    for rec in rx {
-        total += 1;
-        let sig = (rec.mtime, rec.size as i64, rec.flags & (FLAG_DIR | FLAG_HIDDEN));
-        if known.remove(&rec.id) == Some(sig) {
-            if total.is_multiple_of(BATCH as u64) {
+    // The gathering loop runs in a closure that owns `rx`: on failure it drops the receiver, so
+    // the walker's sends fail and it quits instead of blocking on a full channel while the
+    // remaining code joins it.
+    let build: rusqlite::Result<()> = (|| {
+        for rec in rx {
+            total += 1;
+            let sig = (rec.mtime, rec.size as i64, rec.flags & (FLAG_DIR | FLAG_HIDDEN));
+            if known.remove(&rec.id) == Some(sig) {
+                if total.is_multiple_of(BATCH as u64) {
+                    progress(total);
+                }
+                continue;
+            }
+            batch.push(rec);
+            if batch.len() >= BATCH {
+                flush(&mut batch)?;
                 progress(total);
             }
-            continue;
         }
-        batch.push(rec);
-        if batch.len() >= BATCH {
-            flush(&mut batch)?;
-            progress(total);
-        }
-    }
-    flush(&mut batch)?;
+        flush(&mut batch)
+    })();
     let _ = walk.join();
-    if bulk {
-        index.bulk_end()?;
-    }
+    // `bulk_end` runs even when the build failed: it restores the triggers and rebuilds FTS from
+    // whatever is in `files`, so a failed build leaves a consistent (if incomplete) index.
+    let build_failed = build.is_err();
+    let bulk_end = if bulk { index.bulk_end() } else { Ok(()) };
+    let build = build.and(bulk_end);
     progress(total);
 
-    let cancelled = opts.cancelled();
+    // A failed build did not see the whole tree: purge nothing, like a cancelled scan.
+    let cancelled = opts.cancelled() || build_failed;
     let stale: Vec<i64> = if cancelled { Vec::new() } else { known.into_keys().collect() };
     if !stale.is_empty() {
         index.delete_ids(&stale)?;
@@ -461,6 +502,7 @@ pub fn scan(
             c.remove(*id);
         }
     }
+    build?;
     Ok(ScanStats { entries: total, removed: stale.len() as u64, elapsed_ms: t0.elapsed().as_millis() as u64, cancelled })
 }
 
@@ -589,6 +631,10 @@ mod tests {
         index.clear().unwrap();
         assert_eq!(index.count(), 0);
         assert!(index.fts_candidates("router", 10).unwrap().unwrap().is_empty());
+        // The rescan below runs in bulk mode and would mask missing triggers: check them here.
+        for t in ["files_ai", "files_ad", "files_au"] {
+            assert!(trigger_exists(&index.writer.lock().unwrap(), t).unwrap(), "{t} restored");
+        }
         scan(&scope, scope.root(), &index, &corpus, &ScanOptions::default(), true, &|_| {}).unwrap();
         assert_eq!(index.fts_candidates("router", 10).unwrap().unwrap().len(), 1);
     }
@@ -641,5 +687,58 @@ mod tests {
         assert!(index.get("file-browser/Tests").unwrap().is_none());
         assert!(!corpus.read().unwrap().contains(path_id("file-browser/Tests/deep")));
         assert_eq!(index.fts_candidates("RouterTests", 10).unwrap().unwrap().len(), 0);
+    }
+
+    /// A crash between bulk_begin and bulk_end leaves rows the trigram index never saw. The next
+    /// open must rebuild FTS, or the resync diff (which skips unchanged rows) never repairs it.
+    #[test]
+    fn interrupted_bulk_build_is_repaired_on_open() {
+        let (root, data, scope, index, corpus) = setup();
+        scan(&scope, scope.root(), &index, &corpus, &ScanOptions::default(), true, &|_| {}).unwrap();
+        // Simulate a bulk build interrupted after writing rows but before the FTS rebuild: the
+        // triggers are gone, so this new file is stored without reaching files_fts.
+        index.bulk_begin().unwrap();
+        fs::write(root.path().join("file-browser/Interrupted.swift"), "x").unwrap();
+        scan(&scope, scope.root(), &index, &corpus, &ScanOptions::default(), true, &|_| {}).unwrap();
+        let id = path_id("file-browser/Interrupted.swift");
+        assert!(index.fts_candidates("Interrupted", 10).unwrap().unwrap().is_empty(), "triggers are gone in this state");
+        drop(index);
+
+        let index = Index::open(&data.path().join("i.sqlite")).unwrap();
+        assert_eq!(index.fts_candidates("Interrupted", 10).unwrap().unwrap(), vec![id], "open repairs the interrupted bulk build");
+        // And the triggers are back: a later change reaches FTS directly.
+        fs::write(root.path().join("file-browser/Interrupted.swift"), "longer").unwrap();
+        let rec = Record::new(
+            "file-browser/Interrupted.swift".into(),
+            &fs::metadata(root.path().join("file-browser/Interrupted.swift")).unwrap(),
+            false,
+        );
+        index.upsert(&[rec]).unwrap();
+        assert_eq!(index.fts_candidates("Interrupted", 10).unwrap().unwrap(), vec![id]);
+    }
+
+    /// Deleting a subtree and a large stale set runs set-based statements; the FTS index of the
+    /// deleted rows must be gone too.
+    #[test]
+    fn large_deletes_remove_rows_and_their_fts_entries() {
+        let (root, _d, scope, index, corpus) = setup();
+        let big = root.path().join("big");
+        fs::create_dir_all(&big).unwrap();
+        for i in 0..1200 {
+            fs::write(big.join(format!("file-{i:04}.txt")), "x").unwrap();
+        }
+        scan(&scope, scope.root(), &index, &corpus, &ScanOptions::default(), true, &|_| {}).unwrap();
+        let before = index.count();
+        assert_eq!(index.fts_candidates("file-0", 10).unwrap().unwrap().len(), 10);
+
+        fs::remove_dir_all(&big).unwrap();
+        let stats = scan(&scope, scope.root(), &index, &corpus, &ScanOptions::default(), true, &|_| {}).unwrap();
+        // The 1200 files plus the (now gone) directory row itself.
+        assert_eq!(stats.removed, 1201);
+        assert_eq!(index.count(), before - 1201);
+        assert!(index.fts_candidates("file-0", 10).unwrap().unwrap().is_empty());
+        let c = corpus.read().unwrap();
+        assert!(!c.contains(path_id("big")));
+        assert!((0..1200).all(|i| !c.contains(path_id(&format!("big/file-{i:04}.txt")))));
     }
 }

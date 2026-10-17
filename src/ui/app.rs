@@ -35,6 +35,8 @@ const BAR_HIDE_Y: f32 = 44.0;
 const BAR_HIDE_DELAY: Duration = Duration::from_millis(350);
 const NOTICE_TIME: Duration = Duration::from_millis(2200);
 const REMEMBER_DELAY: Duration = Duration::from_millis(800);
+/// Keystrokes closer together than this only run one search (the last one).
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(80);
 /// Pixels per wheel line, so a notch scrolls like a browser (3 lines ≈ 100 px).
 const LINE_PX: f32 = 100.0 / 3.0;
 /// The scene steps back while search or settings is open, so they read on top of it.
@@ -128,6 +130,9 @@ impl Lupasta {
         }
         let (root, initial, persist) = session::starting_point(args.root.clone(), args.select.clone(), &settings, dirs::home_dir());
         let session = session::build_session(&root, initial, &data_dir, args.no_index, &settings, 1)?;
+        // Read the status before the background load starts: afterwards this can stall on the
+        // corpus lock the load thread holds.
+        let status = session.status();
         let (tx, rx) = async_channel::unbounded();
         session::start_session(session.clone(), &data_dir, tx.clone());
         cx.spawn(async move |this, cx| {
@@ -183,7 +188,7 @@ impl Lupasta {
         };
         app.apply(None, cx);
         app.load_root(true, cx);
-        app.status = Some(app.session.status());
+        app.status = Some(status);
         if app.smoke {
             app.run_smoke(cx);
         }
@@ -269,7 +274,8 @@ impl Lupasta {
         cx.spawn(async move |this, cx| {
             for _round in 0..2 {
                 let Ok(Some((missing, scope, opts))) = this.update(cx, |v, _| {
-                    let missing = v.ctl.take_missing_previews();
+                    let window = v.m.window_rows.ceil() as usize;
+                    let missing = v.ctl.take_missing_previews(window);
                     (!missing.is_empty() && v.ctl.epoch == epoch).then(|| (missing, v.session.scope.clone(), v.list_options()))
                 }) else {
                     return;
@@ -447,6 +453,9 @@ impl Lupasta {
             Ok(s) => s,
             Err(e) => return self.flash(e, cx),
         };
+        // Before `start_session` spawns the background load: reading the status after that can
+        // stall on the corpus lock the load thread holds.
+        let status = next.status();
         self.session.retire();
         self.session = next.clone();
         session::start_session(next.clone(), &self.data_dir, self.tx.clone());
@@ -459,7 +468,7 @@ impl Lupasta {
         }
         self.search = None;
         self.load_root(false, cx);
-        self.status = Some(self.session.status());
+        self.status = Some(status);
     }
 
     fn up_root(&mut self, cx: &mut Context<Self>) {
@@ -550,7 +559,13 @@ impl Lupasta {
             }
             Action::ClearIndex => {
                 let (s, tx) = (self.session.clone(), self.tx.clone());
-                cx.background_executor().spawn(async move { session::clear_index(s, tx) }).detach();
+                let cleared = cx.background_executor().spawn(async move { session::clear_index(s, tx) });
+                cx.spawn(async move |this, cx| {
+                    if let Err(e) = cleared.await {
+                        let _ = this.update(cx, |app, cx| app.flash(format!("could not clear index: {e}"), cx));
+                    }
+                })
+                .detach();
             }
             Action::CheckUpdate => self.check_update(cx),
             Action::OpenRelease(url) => {
@@ -688,6 +703,12 @@ impl Lupasta {
         }
         let (corpus, index) = (self.session.corpus.clone(), self.session.index.clone());
         self.search_task = Some(cx.spawn(async move |this, cx| {
+            // Typing burst breaker: the next keystroke replaces this task and cancels the
+            // sleep, so only a pause longer than SEARCH_DEBOUNCE reaches the search itself.
+            cx.background_executor().timer(SEARCH_DEBOUNCE).await;
+            if this.update(cx, |v, _| v.search.as_ref().is_none_or(|s| s.seq != seq)).unwrap_or(true) {
+                return;
+            }
             let res = cx.background_executor().spawn(async move { search::search(&corpus, index.as_deref(), &norm, MAX_HITS) }).await;
             let _ = this.update(cx, |v, cx| {
                 if let Some(st) = v.search.as_mut()
@@ -1028,7 +1049,10 @@ impl Lupasta {
             let bg = cx.background_executor().clone();
             let timer = |ms| bg.timer(Duration::from_millis(ms));
             for _ in 0..100 {
-                let missing = this.update(cx, |v, _| !v.ctl.model.missing_for_preview(&v.ctl.selected_id).is_empty()).unwrap_or(false);
+                let missing = this.update(cx, |v, _| {
+                    let window = v.m.window_rows.ceil() as usize;
+                    !v.ctl.model.missing_for_preview(&v.ctl.selected_id, window).is_empty()
+                }).unwrap_or(false);
                 if !missing {
                     break;
                 }
