@@ -7,19 +7,60 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build, e.g. v0.2.0 (must match Cargo.toml)"
+        required: true
+
+# The tag being released: the pushed tag, or the one given to a manual dispatch. The create job
+# refuses to continue when it does not match the version in Cargo.toml.
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
 
 jobs:
+  # A tag could be pushed from a commit CI never saw; run the same checks before packaging.
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Linux system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --locked
+
   create:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: The tag matches Cargo.toml
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match the Cargo.toml version $version"
+            exit 1
+          fi
+
       - name: Create the draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || gh release create "${{ github.ref_name }}" --draft --title "lupasta ${{ github.ref_name }}" --notes ""
+        run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "lupasta $TAG" --notes ""
 
   build:
     needs: create
@@ -30,6 +71,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Linux system libraries
         if: runner.os == 'Linux'
@@ -46,30 +89,32 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release
+          cargo build --release --locked
           New-Item -ItemType Directory dist | Out-Null
-          Compress-Archive -Path target\release\lupasta.exe -DestinationPath "dist\lupasta-${{ github.ref_name }}-windows-x64.zip"
+          # The bundled fonts are OFL-licensed: ship their licences (and the MIT one) with them.
+          Compress-Archive -Path target\release\lupasta.exe, LICENSE, assets\fonts\LICENSE-Iosevka.txt, assets\fonts\LICENSE-JetBrainsMono.txt, assets\fonts\LICENSE-IBMPlexMono.txt -DestinationPath "dist\lupasta-$env:TAG-windows-x64.zip"
 
       - name: Package (macOS, universal .app)
         if: runner.os == 'macOS'
         run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
           app=dist/lupasta.app/Contents
           mkdir -p "$app/MacOS" "$app/Resources"
           lipo -create -output "$app/MacOS/lupasta" target/aarch64-apple-darwin/release/lupasta target/x86_64-apple-darwin/release/lupasta
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           sed "s/VERSION/$version/g" assets/macos/Info.plist > "$app/Info.plist"
           cp assets/icons/icon.icns "$app/Resources/"
-          (cd dist && zip -qry "lupasta-${{ github.ref_name }}-macos-universal.zip" lupasta.app)
+          cp LICENSE assets/fonts/LICENSE-Iosevka.txt assets/fonts/LICENSE-JetBrainsMono.txt assets/fonts/LICENSE-IBMPlexMono.txt "$app/Resources/"
+          (cd dist && zip -qry "lupasta-$TAG-macos-universal.zip" lupasta.app)
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
-          cargo build --release
-          pkg=dist/lupasta-${{ github.ref_name }}-linux-x64
+          cargo build --release --locked
+          pkg=dist/lupasta-$TAG-linux-x64
           mkdir -p "$pkg"
-          cp target/release/lupasta assets/linux/lupasta.desktop "$pkg/"
+          cp target/release/lupasta assets/linux/lupasta.desktop LICENSE assets/fonts/LICENSE-Iosevka.txt assets/fonts/LICENSE-JetBrainsMono.txt assets/fonts/LICENSE-IBMPlexMono.txt "$pkg/"
           cp assets/icons/128x128.png "$pkg/lupasta.png"
           tar -C dist -czf "$pkg.tar.gz" "$(basename "$pkg")"
 
@@ -77,4 +122,4 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" $(ls dist/*.zip dist/*.tar.gz 2>/dev/null) --clobber
+        run: gh release upload "$TAG" $(ls dist/*.zip dist/*.tar.gz 2>/dev/null) --clobber
