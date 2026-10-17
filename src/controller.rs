@@ -77,7 +77,7 @@ impl Controller {
 
     /// Changes the selection; the caller relayouts. False when nothing changed.
     pub fn select(&mut self, id: &str) -> bool {
-        if id.is_empty() || self.model.get(id).is_none() {
+        if id.is_empty() || id == self.selected_id || self.model.get(id).is_none() {
             return false;
         }
         self.selected_id = id.to_string();
@@ -90,9 +90,10 @@ impl Controller {
     }
 
     /// Folders the preview columns need that are neither loaded nor being loaded; marks them in
-    /// flight. Hand the result of listing them to `previews_loaded`.
-    pub fn take_missing_previews(&mut self) -> Vec<String> {
-        let missing: Vec<String> = self.model.missing_for_preview(&self.selected_id).into_iter().filter(|p| !self.inflight.contains(p)).collect();
+    /// flight. Hand the result of listing them to `previews_loaded`. `window` is the layout
+    /// window in rows (see `Metrics::window_rows`).
+    pub fn take_missing_previews(&mut self, window: usize) -> Vec<String> {
+        let missing: Vec<String> = self.model.missing_for_preview(&self.selected_id, window).into_iter().filter(|p| !self.inflight.contains(p)).collect();
         self.inflight.extend(missing.iter().cloned());
         missing
     }
@@ -266,6 +267,19 @@ mod tests {
         c.select("a");
         assert!(!c.wheel(30.0));
         assert!(c.wheel(30.0));
+        assert_eq!(c.selected_id, "b");
+    }
+
+    /// Re-selecting the current row is a no-op: callers relayout on `true`, so it must not
+    /// report a change that is not there.
+    #[test]
+    fn reselecting_the_same_row_reports_no_change() {
+        let mut c = Controller::new();
+        c.reset("root", &listing("", &[("a", false), ("b", false)]));
+        assert!(c.select("a"));
+        assert!(!c.select("a"));
+        assert!(c.select("b"));
+        assert!(!c.select("missing"), "unknown ids are ignored");
         assert_eq!(c.selected_id, "b");
     }
 }

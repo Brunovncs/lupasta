@@ -76,8 +76,10 @@ Search is fuzzy and matches names and paths: `rtr` finds `OrthogonalRouter.swift
 ## How it works
 
 The core owns the filesystem. The UI only ever passes paths relative to the root, and every one
-is normalised and checked against the root after resolving symlinks, so `..`, drive letters,
-UNC paths and junctions that point outside are refused. Listing a folder reads that one folder;
+is rebuilt component by component and checked against the root after resolving symlinks, so `..`
+never escapes and junctions or symlinks that point outside the root are detected. On Windows,
+drive letters and alternate data streams (`a:stream`) are rejected, and UNC-style input is
+neutralised into a relative path under the root. Listing a folder reads that one folder;
 there is no recursive traversal on the UI side.
 
 A background thread walks the root in parallel and keeps a SQLite index (with an FTS5 trigram
@@ -104,7 +106,9 @@ src/
   ui/             GPUI: the window, painting, overlays, fonts, text input
 ```
 
-Everything outside `ui/` is plain Rust and covered by `cargo test`. GPUI comes from crates.io as
+Everything outside `ui/` is plain Rust; those modules are covered by `cargo test`, together with
+an integration sweep of the scene (layout, routing, golden geometry). The GPUI layer itself is
+exercised by the `--smoke` run. GPUI comes from crates.io as
 the `gpui-pre` 0.3.7 snapshot of Zed (the official `gpui` crate there is still 0.2.2), pinned
 exactly because its API moves with Zed.
 
@@ -120,8 +124,9 @@ cargo run --example fixture && cargo build
 target/debug/lupasta --smoke --root fixtures/visual/Users
 ```
 
-`--smoke` runs the real app once and exits 0 only if it laid out the tree, indexed it, found an
-entry by search and has a working filesystem watcher; CI runs it on all three platforms.
+`--smoke` runs the real app once and exits 0 only if it laid out the tree, waited for the index
+to become ready, found an entry by search and installed the filesystem watcher without error;
+CI runs it on all three platforms.
 
 The sweep test lays out every possible selection in the fixture and checks that no names
 overlap and no connector crosses another or runs through text. The golden test compares every

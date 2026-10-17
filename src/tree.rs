@@ -180,12 +180,21 @@ impl TreeModel {
         }
     }
 
-    /// Directories whose listing the preview columns need but that are not loaded yet.
-    pub fn missing_for_preview(&self, selected: &str) -> Vec<String> {
+    /// Directories whose listing the preview columns need but that are not loaded yet. The
+    /// layout only materializes rows within `window` rows of the focus row, so only those
+    /// folders are requested: this is what keeps selecting a row of a 20,000-entry folder from
+    /// starting 20,000 `read_dir` calls.
+    pub fn missing_for_preview(&self, selected: &str, window: usize) -> Vec<String> {
         let Some(sel) = self.nodes.get(selected) else { return Vec::new() };
-        let mut want: Vec<&Node> = self.siblings(selected).into_iter().filter(|s| s.is_dir).collect();
+        let sibs = self.siblings(selected);
+        let at = sibs.iter().position(|s| s.id == selected).unwrap_or(0);
+        let mut want: Vec<&Node> = sibs.iter().enumerate().filter(|(j, s)| s.is_dir && j.abs_diff(at) <= window).map(|(_, s)| *s).collect();
         if sel.is_dir && sel.loaded {
-            want.extend(self.children(&sel.id).unwrap_or_default().into_iter().filter(|c| c.is_dir));
+            // The selected folder's own group is centred on the focus row, so its children are
+            // materialized around the middle of the list.
+            let kids = self.children(&sel.id).unwrap_or_default();
+            let mid = kids.len().saturating_sub(1) as f64 / 2.0;
+            want.extend(kids.iter().enumerate().filter(|(j, c)| c.is_dir && (*j as f64 - mid).abs() <= window as f64).map(|(_, c)| *c));
         }
         want.into_iter().filter(|n| !n.loaded).map(|n| n.id.clone()).collect()
     }
@@ -206,9 +215,23 @@ mod tests {
         assert!(m.ingest(&Listing { path: "a".into(), entries: vec![e("c", true)] }));
         assert_eq!(m.path_to("a/c"), vec!["a", "a/c"]);
         assert_eq!(m.siblings("b.txt").len(), 2);
-        assert_eq!(m.missing_for_preview("a"), vec!["a/c"]);
+        assert_eq!(m.missing_for_preview("a", 120), vec!["a/c"]);
         assert!(!m.ingest(&Listing { path: "".into(), entries: vec![e("a", true), e("b.txt", false)] }));
         assert!(m.ingest(&Listing { path: "".into(), entries: vec![e("b.txt", false)] }));
         assert!(m.get("a/c").is_none());
+    }
+
+    /// Preview prefetch is bounded to the layout window: selecting a row in a huge folder must
+    /// not queue a `read_dir` per sibling.
+    #[test]
+    fn preview_wants_only_the_visible_window() {
+        let mut m = TreeModel::new("root");
+        let entries: Vec<Entry> = (0..10).map(|i| e(&format!("d{i}"), true)).collect();
+        m.ingest(&Listing { path: "".into(), entries });
+        assert_eq!(m.missing_for_preview("d5", 2), vec!["d3", "d4", "d5", "d6", "d7"]);
+        // Once the selected folder is loaded, its own listing drops out and its child folders
+        // become the level-2 want (centred on the focus row too).
+        m.ingest(&Listing { path: "d5".into(), entries: vec![e("kid", true)] });
+        assert_eq!(m.missing_for_preview("d5", 2), vec!["d3", "d4", "d6", "d7", "d5/kid"]);
     }
 }

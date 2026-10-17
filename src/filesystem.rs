@@ -2,8 +2,9 @@
 //!
 //! The UI only ever speaks in root-relative paths with `/` separators. Every path it
 //! passes in is rebuilt component by component here and verified (after resolving symlinks) to
-//! stay inside the root, so crafted input like `../..`, `C:\`, `\\server\x` or ADS names
-//! (`a:stream`) is rejected before touching the disk.
+//! stay inside the root, so crafted input like `../..` or `C:\Windows` is neutralized before
+//! touching the disk; on Windows, drive prefixes, UNC-style input and ADS names (`a:stream`)
+//! are rejected outright.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -82,11 +83,20 @@ impl Scope {
         if rel.contains('\0') {
             return Err(FsError::InvalidPath(rel.into()));
         }
+        // On Windows both characters carry path meaning: `\` is a separator, and `:` opens an
+        // alternate data stream (`file:stream`) or is a drive prefix (`C:`). On Unix they are
+        // ordinary filename bytes, so rejecting or splitting on them would make files like
+        // `a\b` or `c:d` unreachable (and `a\b` would even alias the paths `a` + `b`).
+        #[cfg(windows)]
+        let separators = ['/', '\\'];
+        #[cfg(not(windows))]
+        let separators = ['/'];
         let mut parts: Vec<&str> = Vec::new();
-        for part in rel.split(['/', '\\']) {
+        for part in rel.split(separators) {
             match part {
                 "" | "." => continue,
                 ".." => return Err(FsError::OutsideRoot),
+                #[cfg(windows)]
                 p if p.contains(':') => return Err(FsError::InvalidPath(rel.into())),
                 p => parts.push(p),
             }
@@ -289,12 +299,42 @@ mod tests {
     fn normalize_rejects_traversal_and_drive_prefixes() {
         assert_eq!(Scope::normalize("a/b/../c").unwrap_err().to_string(), "path escapes the root");
         assert!(Scope::normalize("..").is_err());
-        assert!(Scope::normalize("C:\\Windows").is_err());
-        assert!(Scope::normalize("file.txt:stream").is_err());
         assert!(Scope::normalize("a\0b").is_err());
         assert_eq!(Scope::normalize("/a//b/./c/").unwrap(), "a/b/c");
-        assert_eq!(Scope::normalize("a\\b").unwrap(), "a/b");
         assert_eq!(Scope::normalize("").unwrap(), "");
+        // Windows: `\` is a separator and `:` means a drive prefix or an alternate data stream.
+        #[cfg(windows)]
+        {
+            assert!(Scope::normalize("C:\\Windows").is_err());
+            assert!(Scope::normalize("file.txt:stream").is_err());
+            assert_eq!(Scope::normalize("a\\b").unwrap(), "a/b");
+        }
+        // Unix: both are ordinary filename bytes, kept as part of the name.
+        #[cfg(unix)]
+        {
+            assert_eq!(Scope::normalize("a\\b").unwrap(), "a\\b");
+            assert_eq!(Scope::normalize("file.txt:stream").unwrap(), "file.txt:stream");
+        }
+    }
+
+    /// On Unix a filename may contain `\` or `:`. It must survive listing, resolution and the
+    /// absolute→relative round trip instead of being split, rejected or aliased.
+    #[cfg(unix)]
+    #[test]
+    fn unix_names_with_backslash_and_colon_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a\\b"), "x").unwrap();
+        fs::write(dir.path().join("c:d"), "y").unwrap();
+        let scope = Scope::new(dir.path()).unwrap();
+        let abs = scope.resolve("a\\b").unwrap();
+        assert_eq!(abs.file_name().unwrap(), "a\\b");
+        assert_eq!(scope.to_rel(&abs).unwrap(), "a\\b");
+        let colon = scope.resolve("c:d").unwrap();
+        assert_eq!(colon.file_name().unwrap(), "c:d");
+        assert_eq!(scope.to_rel(&colon).unwrap(), "c:d");
+        let names: Vec<String> = list_dir(dir.path()).unwrap().into_iter().map(|e| e.0).collect();
+        assert!(names.contains(&"a\\b".to_string()), "{names:?}");
+        assert!(names.contains(&"c:d".to_string()), "{names:?}");
     }
 
     #[test]

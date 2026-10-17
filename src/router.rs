@@ -345,24 +345,28 @@ pub fn route_layout(layout: &Layout, bx: &dyn Fn(&str) -> Option<Box>, m: &Metri
         }
     }
     let first_preview_col = layout.groups.first().map_or(0, |g| g.col);
+    // One lookup pass per column the loop below consults, cached by column: the cached vectors
+    // are borrowed rather than cloned, so a frame never copies a whole column per group.
     let mut column_boxes: HashMap<usize, Vec<(&str, Box)>> = HashMap::new();
-    let mut col_boxes = |col: usize| -> Vec<(&str, Box)> {
-        column_boxes
-            .entry(col)
-            .or_insert_with(|| layout.columns.get(col).map_or(Vec::new(), |c| c.ids.iter().filter_map(|id| bx(id).map(|b| (id.as_str(), b))).collect()))
-            .clone()
-    };
+    for g in &layout.groups {
+        let parent_col = layout.nodes.get(&g.parent_id).map(|pn| pn.col);
+        for col in parent_col.into_iter().chain([g.col]) {
+            column_boxes
+                .entry(col)
+                .or_insert_with(|| layout.columns.get(col).map_or(Vec::new(), |c| c.ids.iter().filter_map(|id| bx(id).map(|b| (id.as_str(), b))).collect()));
+        }
+    }
     let mut geoms = Vec::new();
     for g in &layout.groups {
         let (Some(parent), Some(first), Some(last), Some(pn)) = (bx(&g.parent_id), bx(&g.first_id), bx(&g.last_id), layout.nodes.get(&g.parent_id)) else {
             continue;
         };
-        let siblings = col_boxes(pn.col).into_iter().filter(|(id, _)| *id != g.parent_id).map(|(_, b)| b).collect();
+        let siblings = column_boxes.get(&pn.col).into_iter().flatten().filter(|(id, _)| *id != g.parent_id).map(|(_, b)| *b).collect();
         let base_x = match (layout.nodes.get(&g.first_id), layout.columns.get(g.col)) {
             (Some(t), Some(c)) => first.x - (t.x - c.x),
             _ => first.x,
         };
-        let targets = col_boxes(g.col).into_iter().map(|(_, b)| b).collect();
+        let targets = column_boxes.get(&g.col).into_iter().flatten().map(|(_, b)| *b).collect();
         geoms.push(GroupGeom {
             id: format!("g:{}", g.parent_id),
             level: g.col - first_preview_col,

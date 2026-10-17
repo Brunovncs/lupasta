@@ -126,11 +126,18 @@ mod tests {
         for i in 0..20 {
             std::fs::write(root.join(format!("f{i}.txt")), "x").unwrap();
         }
-        let batch = rx.recv_timeout(Duration::from_secs(5)).expect("batch");
-        let mut seen: BTreeSet<PathBuf> = batch.paths.into_iter().collect();
-        while let Ok(more) = rx.recv_timeout(Duration::from_millis(400)) {
-            seen.extend(more.paths);
+        // Collect until every file has been reported, with one overall deadline: a fixed drain
+        // window after the first batch flakes when the OS delivers the events late.
+        let expected: BTreeSet<PathBuf> = (0..20).map(|i| root.join(format!("f{i}.txt"))).collect();
+        let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !expected.is_subset(&seen) && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(batch) => seen.extend(batch.paths),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
         }
-        assert!((0..20).all(|i| seen.contains(&root.join(format!("f{i}.txt")))), "{seen:?}");
+        assert!(expected.is_subset(&seen), "{seen:?}");
     }
 }
